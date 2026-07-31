@@ -1,0 +1,91 @@
+name: Deploy dashboard to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it - a half-deployed
+# Pages site is worse than a slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate published data
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+
+          data = pathlib.Path("docs/data")
+          required = ["summary.json", "winners.json", "leaderboards.json",
+                      "meta.json", "states.json"]
+          problems = []
+
+          for name in required:
+              p = data / name
+              if not p.exists():
+                  problems.append(f"missing {name}")
+                  continue
+              try:
+                  payload = json.loads(p.read_text(encoding="utf-8"))
+              except json.JSONDecodeError as e:
+                  problems.append(f"{name} is not valid JSON: {e}")
+                  continue
+              print(f"  {name:<24} {p.stat().st_size/1024:>8.1f} KB  ok")
+
+              def check_states(rows, where):
+                  for row in rows:
+                      s = row.get("state", "")
+                      # guards the "&hra Pradesh" and "Bye Election On ..."
+                      # classes of conforming bug
+                      if s.startswith("&") or "  " in s or "bye" in s.lower():
+                          problems.append(f"malformed state name in {where}: {s!r}")
+
+              if name == "summary.json":
+                  years = payload.get("meta", {}).get("election_years", [])
+                  if not years:
+                      problems.append("summary.json declares no election years")
+                  check_states(payload.get("state_summary", []), "state_summary")
+              if name == "states.json":
+                  check_states(payload.get("state_trends", []), "state_trends")
+              if name == "winners.json":
+                  if not payload.get("winners"):
+                      problems.append("winners.json contains no winners")
+                  check_states(payload.get("winners", []), "winners")
+
+          if problems:
+              print("\nVALIDATION FAILED:")
+              for p in dict.fromkeys(problems):
+                  print("  -", p)
+              sys.exit(1)
+          print("\nall data files valid")
+          PY
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deployment
+        uses: actions/deploy-pages@v4

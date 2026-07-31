@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Who Represents India — Lok Sabha candidate affidavits, 2004–2024</title>
+<meta name="description" content="An open dashboard of declared wealth, criminal cases, education and age for every Lok Sabha candidate from 2004 to 2024, built from ADR/MyNeta affidavit data.">
+<meta property="og:title" content="Who Represents India — Lok Sabha candidate affidavits, 2004–2024">
+<meta property="og:description" content="Declared wealth, criminal cases, education and age for every Lok Sabha candidate, 2004–2024.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗳️</text></svg>">
+</head>
+<body>
+
+<button class="theme-toggle" id="themeToggle" aria-label="Switch colour theme">◐ Theme</button>
+
+<div class="wrap">
+
+<header>
+  <h1>Who represents India</h1>
+  <p class="subtitle">
+    Every candidate who contested a Lok Sabha election between 2004 and 2024, as declared
+    in their own sworn affidavit to the Election Commission: what they own, what they owe,
+    what cases they face, and how far they went in school.
+  </p>
+  <div class="provenance">
+    <span>Source: <a href="https://www.myneta.info/" rel="noopener">MyNeta</a> —
+      <a href="https://adrindia.org/" rel="noopener">ADR</a> / National Election Watch</span>
+    <span id="metaLine">Loading…</span>
+    <span><a href="data/candidates.csv" download>Download full dataset (CSV)</a></span>
+  </div>
+</header>
+
+<div id="app" class="loading">Loading dashboard data…</div>
+
+<template id="dashboardTpl">
+
+  <!-- one filter row, above everything it scopes -->
+  <div class="filters">
+    <div class="filter-group">
+      <label for="fYear">Election</label>
+      <select id="fYear"></select>
+    </div>
+    <div class="filter-group">
+      <label for="fState">State / UT</label>
+      <select id="fState"><option value="">All states</option></select>
+    </div>
+    <div class="filter-group">
+      <label id="cohortLbl">Who to count</label>
+      <div class="segmented" role="group" aria-labelledby="cohortLbl">
+        <button id="cohAll" aria-pressed="true">All candidates</button>
+        <button id="cohWin" aria-pressed="false">Winners only</button>
+      </div>
+    </div>
+    <button class="clear-filters hidden" id="clearFilters">✕ Clear filters</button>
+    <div class="filter-group" style="margin-left:auto">
+      <span class="context-line" id="contextLine" aria-live="polite"></span>
+    </div>
+  </div>
+
+  <div class="notice hidden" id="sliceNotice" role="status"></div>
+
+  <div class="kpi-row" id="kpiRow"></div>
+
+  <section class="card">
+    <div class="card-head"><h2 id="insightsTitle">What stands out</h2></div>
+    <ul class="insights" id="insightsList"></ul>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>Candidates facing criminal cases</h2>
+        <button class="view-toggle" data-view="crimeTrend">Table view</button>
+      </div>
+      <p class="desc">Share declaring at least one pending criminal case. Winners are
+        tracked separately from the full field — the gap between the lines is the story.</p>
+      <div class="chart-host" id="crimeTrend"></div>
+      <div class="legend" id="crimeTrendLegend"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Median declared assets</h2>
+        <button class="view-toggle" data-view="assetTrend">Table view</button>
+      </div>
+      <p class="desc">Median, not mean: a handful of billionaire candidates would drag an
+        average into nonsense. Figures are nominal rupees, not inflation-adjusted.</p>
+      <div class="chart-host" id="assetTrend"></div>
+      <div class="legend" id="assetTrendLegend"></div>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>Crorepati candidates</h2>
+        <button class="view-toggle" data-view="croreTrend">Table view</button>
+      </div>
+      <p class="desc">Share declaring assets of ₹1 crore or more.</p>
+      <div class="chart-host" id="croreTrend"></div>
+      <div class="legend" id="croreTrendLegend"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Education profile</h2>
+        <button class="view-toggle" data-view="eduDist">Table view</button>
+      </div>
+      <p class="desc">Self-declared highest qualification, as a share of all candidates
+        each year.</p>
+      <div class="chart-host" id="eduDist"></div>
+      <div class="legend" id="eduDistLegend"></div>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2 id="ageTitle">Age profile</h2>
+        <button class="view-toggle" data-view="ageDist">Table view</button>
+      </div>
+      <p class="desc">Age bands as a share of the cohort each year, young at the bottom.</p>
+      <div class="chart-host" id="ageDist"></div>
+      <div class="legend" id="ageDistLegend"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 id="partyTitle">Seats won by party</h2>
+        <button class="view-toggle" data-view="partyChart">Table view</button>
+      </div>
+      <p class="desc" id="partyDesc">Parties winning at least five seats keep their own
+        label; the long tail of one-candidate parties is grouped. Click a bar to see that
+        party's MPs below.</p>
+      <div class="chart-host" id="partyChart"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <h2 id="stateTitle">States by share of MPs facing cases</h2>
+      <div style="display:flex; gap:8px; align-items:center">
+        <button class="view-toggle hidden" id="backToStates">← All states</button>
+        <button class="view-toggle" data-view="stateChart">Table view</button>
+      </div>
+    </div>
+    <p class="desc" id="stateDesc">Winning MPs only. States with fewer than three seats
+      are excluded — one MP in a two-seat state swings the percentage wildly. Click a bar
+      to focus the whole page on that state.</p>
+    <div class="chart-host" id="stateChart"></div>
+    <div class="legend" id="stateChartLegend"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2 id="tableTitle">The people elected</h2>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+        <span id="chipBar"></span>
+        <input type="search" class="search-input" id="tableSearch"
+               placeholder="Search name, party, constituency…" aria-label="Search candidates">
+      </div>
+    </div>
+    <p class="desc">Every MP returned to the Lok Sabha in the selected election. Click a
+      column heading to sort. Names link to the underlying affidavit on MyNeta.</p>
+    <div id="winnersTable"></div>
+    <div class="table-meta">
+      <span id="tableCount"></span>
+      <button class="link-btn" id="downloadFiltered">Download this view (CSV)</button>
+      <span>Assets and cases are self-declarations from the candidate's own affidavit.</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Leaderboards</h2>
+      <div class="segmented" role="group" aria-label="Leaderboard">
+        <button id="lbRich" aria-pressed="true">Richest</button>
+        <button id="lbCases" aria-pressed="false">Most cases</button>
+      </div>
+    </div>
+    <p class="desc" id="lbDesc">Top 50 candidates in the selected election, across the
+      whole field — not just those who won.</p>
+    <div id="leaderboardTable"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Candidates who contested more than once</h2>
+      <input type="search" class="search-input" id="repeatSearch"
+             placeholder="Search name or state…" aria-label="Search repeat candidates">
+    </div>
+    <p class="desc">
+      Matching candidates across elections is something the source site cannot do. Ranked
+      by the change in declared assets between a candidate's <strong>first and last</strong>
+      election — a gap of up to twenty years, <strong>not inflation-adjusted</strong>,
+      reflecting nothing more than what two affidavits stated. Names are matched loosely,
+      so people who share a name can be merged.
+    </p>
+    <div id="repeatTable"></div>
+  </section>
+
+  <footer>
+    <h3>About this data</h3>
+    <p>
+      Every figure here is a <strong>self-declaration</strong>. Candidates file a sworn
+      affidavit with the Election Commission of India; the Association for Democratic
+      Reforms and National Election Watch transcribe and publish those affidavits at
+      MyNeta. This dashboard aggregates that published record — it adds no estimates of
+      its own.
+    </p>
+
+    <h3>Reading it honestly</h3>
+    <ul>
+      <li><strong>"Criminal cases" means cases pending, not convictions.</strong> A
+        declared case may be a serious charge or a protest-related FIR. It is not a
+        finding of guilt.</li>
+      <li><strong>Assets are nominal and not inflation-adjusted.</strong> Some of the
+        rise from 2004 to 2024 is simply the rupee.</li>
+      <li><strong>Coverage is not uniform.</strong> Older elections, especially 2004, have
+        blank asset fields for some candidates. Those are excluded from medians rather
+        than counted as zero.</li>
+      <li><strong>State boundaries changed.</strong> Telangana was created in 2014, so
+        pre-2014 rows attribute those seats to Andhra Pradesh.</li>
+      <li><strong>General elections only.</strong> The source sites also list bye-elections
+        held years later; those rows are excluded from every chart (they remain in the
+        downloadable CSV, flagged).</li>
+      <li><strong>2004 winner tagging is incomplete at the source</strong> — about 29
+        constituencies carry no winner marker, so 2004 shows 514 MPs rather than 543.</li>
+      <li><strong>Names are matched loosely</strong> when tracking repeat candidates;
+        common names may collide.</li>
+    </ul>
+
+    <h3>How it is built</h3>
+    <p id="pipelineNote">
+      Candidate pages are scraped from MyNeta, refined through a Databricks medallion
+      pipeline (bronze → silver → gold), and exported as pre-aggregated JSON committed to
+      this repository. The page you are reading is static: no query runs when you load it.
+    </p>
+    <p>
+      Not affiliated with ADR, MyNeta, or the Election Commission of India.
+      Please support <a href="https://adrindia.org/donate" rel="noopener">ADR</a>, who do
+      the actual work of transcribing these affidavits.
+    </p>
+  </footer>
+
+</template>
+
+</div>
+
+<!-- version query busts stale module caches after a deploy -->
+<script type="module" src="js/app.js?v=2"></script>
+</body>
+</html>

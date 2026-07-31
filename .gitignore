@@ -1,0 +1,25 @@
+# Scraped HTML cache - large, regenerable, and not something to republish
+.cache/
+
+# Raw scrape output. The tidy dataset is published as docs/data/candidates.csv;
+# these intermediate JSONL files are rebuildable and would bloat the repo.
+data/raw/
+data/partial/
+data/smoke/
+
+# Databricks bundle state
+.databricks/
+databricks/.databricks/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
