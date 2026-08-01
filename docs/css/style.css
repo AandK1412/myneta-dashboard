@@ -241,6 +241,12 @@ button:focus-visible, th[role="button"]:focus-visible {
   outline: 2px solid var(--series-1); outline-offset: 2px;
 }
 
+select:disabled, .segmented button:disabled {
+  opacity: .45; cursor: not-allowed;
+}
+.filter-group:has(select:disabled) label,
+.filter-group:has(button:disabled) label { opacity: .55; }
+
 .segmented { display: flex; gap: 2px; background: var(--page);
   border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
 .segmented button {

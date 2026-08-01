@@ -97,8 +97,9 @@
           <h2>Candidates facing criminal cases</h2>
           <button class="view-toggle" data-view="crimeTrend">Table view</button>
         </div>
-        <p class="desc">Share declaring at least one pending criminal case. Winners are
-          tracked separately from the full field — the gap between the lines is the story.</p>
+        <p class="desc">Share declaring at least one pending criminal case. Both lines are
+          always drawn — the gap between them is the story — with your selected cohort
+          emphasised.</p>
         <div class="chart-host" id="crimeTrend"></div>
         <div class="legend" id="crimeTrendLegend"></div>
       </section>
@@ -227,6 +228,8 @@
         election — a gap of up to twenty years, <strong>not inflation-adjusted</strong>,
         reflecting nothing more than what two affidavits stated. Names are matched loosely,
         so people who share a name can be merged.
+        <strong>This table spans every election</strong>, so the election filter above does
+        not narrow it; the state filter does.
       </p>
       <div id="repeatTable"></div>
     </section>
@@ -427,6 +430,6 @@
 </div>
 
 <!-- version query busts stale module caches after a deploy -->
-<script type="module" src="js/app.js?v=4"></script>
+<script type="module" src="js/app.js?v=5"></script>
 </body>
 </html>

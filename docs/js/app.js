@@ -12,7 +12,7 @@
 import {
   lineChart, barChart, stackedBar, legend, renderTable,
   fmtRupees, fmtPct, fmtInt, hideTip
-} from "./charts.js?v=2";
+} from "./charts.js?v=3";
 
 const CSS = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const $ = (id) => document.getElementById(id);
@@ -403,7 +403,7 @@ function renderMplads() {
     { label: "Spent", num: true, get: r => fmtRupees(r.expenditure), sortVal: r => r.expenditure },
     { label: "% spent", num: true, sortVal: r => r.pct_spent,
       get: r => r.pct_spent === null || r.pct_spent === undefined ? "—" : r.pct_spent.toFixed(1) + "%" },
-    { label: "Works done / rec.", num: true, sortVal: r => r.works_completed,
+    { label: "Works completed / recommended", num: true, sortVal: r => r.works_completed,
       get: r => `${fmtInt(r.works_completed)} / ${fmtInt(r.works_recommended)}` },
   ], rows, { sortable: true, id: "mpladsTbl" });
 
@@ -473,14 +473,34 @@ function renderReconciliation(rec) {
 }
 
 function updateChrome() {
-  $("contextLine").textContent =
-    `${state.year} · ${scopeName()} · ${state.cohort}`;
+  // Filters only claim to apply where they actually do. The funds tab is
+  // term-scoped (election year and cohort are inert there); the about tab
+  // takes no filters at all. Presenting a control that silently no-ops is
+  // worse than dimming it.
+  const onFunds = state.tab === "funds";
+  const onAbout = state.tab === "about";
+
+  document.querySelector(".filters").style.display = onAbout ? "none" : "";
+
+  const inertNote = "Not applicable on this tab — development funds cover the current term only";
+  $("fYear").disabled = onFunds;
+  $("fYear").title = onFunds ? inertNote : "";
+  for (const id of ["cohAll", "cohWin"]) {
+    $(id).disabled = onFunds;
+    $(id).title = onFunds ? inertNote : "";
+  }
+
+  $("contextLine").textContent = onFunds
+    ? `${state.mplads?.meta?.tenure || "Current term"} · ${scopeName()}`
+    : `${state.year} · ${scopeName()} · ${state.cohort}`;
 
   const active = state.stateFilter || state.partyFilter || state.search ||
                  state.repeatSearch || state.mpladsSearch;
   $("clearFilters").classList.toggle("hidden", !active);
 
-  const msgs = sliceGaps();
+  // Election-data notices (e.g. "Telangana did not exist in 2004") are about
+  // the election slice, which the funds and about tabs do not show.
+  const msgs = (onFunds || onAbout) ? [] : sliceGaps();
   const notice = $("sliceNotice");
   notice.classList.toggle("hidden", msgs.length === 0);
   notice.innerHTML = msgs.join("<br>");
@@ -581,10 +601,13 @@ function renderInsights() {
 function trendSeries(field) {
   const cols = cohortColors();
   const years = state.summary.meta.election_years;
+  // Both cohorts are always plotted - the gap between them is the story - but
+  // the one selected in the filter row is emphasised, so the control visibly
+  // does something here rather than appearing to be ignored.
   return Object.values(COHORTS).map(c => {
     const rows = trendsSlice(c);
     return {
-      name: c, color: cols[c],
+      name: c, color: cols[c], dim: c !== state.cohort,
       points: years.map(y => ({ x: y, y: rows.find(r => r.election_year === y)?.[field] ?? null })),
     };
   });
@@ -610,15 +633,16 @@ function drawTrend(hostId, field, fmt, yLabel, label) {
   }
   lineChart(host, { series, xs: years, yFormat: fmt, yLabel,
     keyboardLabel: `${label} — ${scopeName()}` });
-  legend(legendHost, series.map(s => ({ name: s.name, color: s.color })));
+  legend(legendHost, series.map(s => ({
+    name: s.name + (s.dim ? "" : " (selected)"), color: s.color })));
 }
 
 function renderTrends() {
-  drawTrend("crimeTrend", "pct_criminal", v => v.toFixed(0) + "%", "% of cohort",
+  drawTrend("crimeTrend", "pct_criminal", v => v.toFixed(0) + "%", "% facing cases",
     "Share facing criminal cases by election year");
-  drawTrend("assetTrend", "median_assets", fmtRupees, "",
+  drawTrend("assetTrend", "median_assets", fmtRupees, "median assets",
     "Median declared assets by election year");
-  drawTrend("croreTrend", "pct_crorepati", v => v.toFixed(0) + "%", "% of cohort",
+  drawTrend("croreTrend", "pct_crorepati", v => v.toFixed(0) + "%", "% crorepati",
     "Share of crorepati candidates by election year");
 }
 
@@ -708,8 +732,9 @@ function renderParty() {
   }
   barChart(host, { data: rows, labelKey: "party_group", valueKey: "seats_won",
     color: CSS("--series-1"), valueFormat: fmtInt, maxBars: 12, note: "Seats won",
+    integerAxis: true,   // seats are whole numbers
     onClick: (r) => setPartyFilter(r.party_group),
-    clickHint: "Click to list these MPs below" });
+    clickHint: "Click to list this party's MPs" });
 }
 
 /* ---------- state chart: ranking, or state-vs-India emphasis ---------- */

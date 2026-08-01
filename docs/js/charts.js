@@ -74,13 +74,16 @@ function inkFor(hex) {
 
 /* ---------- axis helper ---------- */
 
-function niceTicks(min, max, count = 5) {
+function niceTicks(min, max, count = 5, { integer = false } = {}) {
   if (min === max) { min = Math.min(0, min); max = max || 1; }
   const span = max - min;
   const raw = span / count;
   const mag = Math.pow(10, Math.floor(Math.log10(raw)));
   const norm = raw / mag;
-  const step = (norm >= 7.5 ? 10 : norm >= 3.5 ? 5 : norm >= 1.5 ? 2 : 1) * mag;
+  let step = (norm >= 7.5 ? 10 : norm >= 3.5 ? 5 : norm >= 1.5 ? 2 : 1) * mag;
+  // Counts have no fractional values: a "0.4 seats" gridline is nonsense, and
+  // it appears whenever a slice is small enough that the max is 1 or 2.
+  if (integer) step = Math.max(1, Math.round(step));
   const lo = Math.floor(min / step) * step;
   const hi = Math.ceil(max / step) * step;
   const out = [];
@@ -140,23 +143,27 @@ export function lineChart(host, { series, xs, yFormat = fmtInt, yLabel = "",
   const crosshair = el("line", { y1: M.t, y2: M.t + ih, stroke: CSS("--axis"),
     "stroke-width": 1, opacity: 0 }, svg);
 
-  for (const s of series) {
+  // Draw de-emphasised series first so the emphasised one sits on top.
+  for (const s of [...series].sort((a, b) => (a.dim === b.dim ? 0 : a.dim ? -1 : 1))) {
     const pts = s.points.map((p, i) => ({ ...p, i })).filter(p => p.y !== null && p.y !== undefined);
     if (!pts.length) continue;
+    const op = s.dim ? 0.38 : 1;
     el("path", {
       d: pts.map((p, k) => `${k ? "L" : "M"}${X(p.i)},${Y(p.y)}`).join(" "),
-      fill: "none", stroke: s.color, "stroke-width": 2,
-      "stroke-linecap": "round", "stroke-linejoin": "round"
+      fill: "none", stroke: s.color, "stroke-width": s.dim ? 1.5 : 2,
+      opacity: op, "stroke-linecap": "round", "stroke-linejoin": "round"
     }, svg);
     // 2px surface ring keeps overlapping markers separable
     for (const p of pts) {
-      el("circle", { cx: X(p.i), cy: Y(p.y), r: 4.5, fill: s.color,
-        stroke: CSS("--surface-1"), "stroke-width": 2 }, svg);
+      el("circle", { cx: X(p.i), cy: Y(p.y), r: s.dim ? 3.5 : 4.5, fill: s.color,
+        opacity: op, stroke: CSS("--surface-1"), "stroke-width": 2 }, svg);
     }
     // selective direct label: endpoint only
     const last = pts[pts.length - 1];
-    el("text", { x: X(last.i) + 10, y: Y(last.y) + 4, fill: CSS("--text-secondary"),
-      "font-size": 11.5, "font-weight": 600 }, svg).textContent = yFormat(last.y);
+    el("text", { x: X(last.i) + 10, y: Y(last.y) + 4,
+      fill: s.dim ? CSS("--text-muted") : CSS("--text-secondary"),
+      "font-size": 11.5, "font-weight": s.dim ? 500 : 600 }, svg)
+      .textContent = yFormat(last.y);
   }
 
   // one hit band per x - hit target far wider than the 8px marker
@@ -201,7 +208,7 @@ export function lineChart(host, { series, xs, yFormat = fmtInt, yLabel = "",
 
 export function barChart(host, { data, labelKey, valueKey, color, valueFormat = fmtInt,
                                  barHeight = 22, maxBars = 15, note = "",
-                                 onClick = null, clickHint = "" }) {
+                                 onClick = null, clickHint = "", integerAxis = false }) {
   host.innerHTML = "";
   const rows = data.slice(0, maxBars);
   if (!rows.length) { host.innerHTML = '<p class="desc">No data for this selection.</p>'; return; }
@@ -218,7 +225,7 @@ export function barChart(host, { data, labelKey, valueKey, color, valueFormat = 
   const iw = W - M.l - M.r;
 
   const max = Math.max(...rows.map(r => r[valueKey] ?? 0), 1);
-  const ticks = niceTicks(0, max, 4);
+  const ticks = niceTicks(0, max, 4, { integer: integerAxis });
   const scale = (v) => (v / ticks[ticks.length - 1]) * iw;
 
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H,
