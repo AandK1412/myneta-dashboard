@@ -141,15 +141,87 @@ h1 {
 }
 .theme-toggle:hover { color: var(--text-primary); }
 
-/* ---------- filters: one row, above everything it scopes ---------- */
+/* ---------- top bar: tabs + filters travel together ----------
+   The filter row scopes every panel, so it must stay visible whichever tab
+   is open. Both stick as one unit rather than fighting over `top`. */
+
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--page);
+  padding-top: 8px; margin-bottom: 26px;
+}
+
+.tabs {
+  display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none;
+  border-bottom: 1px solid var(--border); margin-bottom: 12px;
+}
+.tabs::-webkit-scrollbar { display: none; }
+
+.tabs [role="tab"] {
+  font: inherit; font-size: 14px; font-weight: 550;
+  background: transparent; color: var(--text-secondary);
+  border: 0; border-bottom: 2px solid transparent;
+  padding: 9px 15px; cursor: pointer; white-space: nowrap;
+  border-radius: 8px 8px 0 0; transition: color .12s, border-color .12s;
+}
+.tabs [role="tab"]:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--series-1) 6%, transparent);
+}
+.tabs [role="tab"][aria-selected="true"] {
+  color: var(--series-1); font-weight: 650;
+  border-bottom-color: var(--series-1);
+}
+.tabs [role="tab"]:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
 
 .filters {
   display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: flex-end;
   background: var(--surface-1);
   border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 16px 18px; margin-bottom: 26px; box-shadow: var(--shadow);
-  position: sticky; top: 0; z-index: 20;
+  padding: 16px 18px; box-shadow: var(--shadow);
 }
+
+.tabpanel[hidden] { display: none; }
+
+.about-list { margin: 0 0 14px; padding-left: 20px; color: var(--text-secondary);
+  font-size: 14px; line-height: 1.6; }
+.about-list li { margin-bottom: 7px; }
+.about-list strong { color: var(--text-primary); }
+
+/* ---------- source attribution cards ---------- */
+
+.source-grid {
+  display: grid; gap: 16px; margin-top: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+}
+
+.source {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 18px; background: var(--page);
+}
+.source h3 { font-size: 16px; margin: 0 0 8px; letter-spacing: -0.01em; }
+.source h3 a { color: var(--text-primary); text-decoration-color: var(--series-1); }
+.source h3 a:hover { color: var(--series-1); }
+.source p { font-size: 13.5px; color: var(--text-secondary); margin: 0 0 12px; line-height: 1.55; }
+
+.source-tag {
+  display: inline-block; font-size: 10.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .07em;
+  color: var(--series-1);
+  background: color-mix(in srgb, var(--series-1) 12%, transparent);
+  border-radius: 999px; padding: 3px 9px; margin-bottom: 10px;
+}
+
+.source dl {
+  margin: 0; display: grid; grid-template-columns: auto 1fr;
+  gap: 5px 12px; font-size: 12.5px;
+}
+.source dt {
+  color: var(--text-muted); font-weight: 650;
+  text-transform: uppercase; letter-spacing: .04em; font-size: 10.5px;
+  padding-top: 2px; white-space: nowrap;
+}
+.source dd { margin: 0; color: var(--text-secondary); }
 
 .filter-group { display: flex; flex-direction: column; gap: 6px; }
 
@@ -344,6 +416,18 @@ tbody tr:hover { background: color-mix(in srgb, var(--series-1) 6%, transparent)
   .kpi.kpi-in { animation: none; }
 }
 
+.sub-h {
+  font-size: 13px; font-weight: 650; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: .05em;
+  margin: 22px 0 10px;
+}
+
+.notice ul { margin: 6px 0 0; padding-left: 18px; }
+.notice li { margin-bottom: 4px; }
+.notice details summary {
+  cursor: pointer; font-weight: 600; color: var(--text-primary);
+}
+
 .link-btn {
   all: unset; cursor: pointer; color: var(--series-1); font-size: 12.5px;
 }
@@ -376,11 +460,15 @@ footer a { color: var(--series-1); }
 
 @media (max-width: 640px) {
   .grid-2 { grid-template-columns: 1fr; }
-  .filters { position: static; }
+  /* Sticky chrome costs too much height on a phone; let it scroll away. */
+  .topbar { position: static; }
   .kpi-value { font-size: 25px; }
+  .tabs [role="tab"] { padding: 9px 12px; font-size: 13.5px; }
 }
 
 @media print {
-  .filters, .theme-toggle, .view-toggle { display: none; }
+  .topbar, .theme-toggle, .view-toggle { display: none; }
   .card { break-inside: avoid; }
+  /* Printing should give the whole report, not just the open tab. */
+  .tabpanel[hidden] { display: block !important; }
 }

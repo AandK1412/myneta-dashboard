@@ -48,6 +48,13 @@ jobs:
             --out ../data/raw \
             --cache ../.cache
 
+      - name: Fetch MPLADS fund data (eSAKSHI)
+        working-directory: pipeline
+        # Non-fatal: the dashboard degrades gracefully (card hides) if the
+        # portal is down; election data should still refresh.
+        continue-on-error: true
+        run: python fetch_mplads.py --out ../data/raw --cache ../.cache/mplads
+
       - name: Build static payloads
         working-directory: pipeline
         run: python build_static.py --raw ../data/raw --out ../docs/data

@@ -268,6 +268,216 @@ def build_gold(silver):
             "leaderboards": boards, "repeat_candidates": repeats[:500]}
 
 
+def build_mplads(raw_dir: "pathlib.Path", silver, generated: str):
+    """
+    Join eSAKSHI MPLADS rows (current Lok Sabha term) to the most recent
+    election's winners by normalised state+constituency.
+
+    The join is deliberately loud about its failure modes: seats where the
+    sitting MP's name no longer matches the general-election winner (bye-
+    elections, resignations) are listed in `mp_changed`, and constituencies
+    that failed to join at all are listed in `unmatched`. Those lists are
+    shipped in the payload - the dashboard shows them rather than hiding them.
+    """
+    import pathlib
+    src = pathlib.Path(raw_dir) / "mplads.jsonl"
+    nat_src = pathlib.Path(raw_dir) / "mplads_national.json"
+    if not src.exists():
+        return None
+
+    from mplads import (norm_key, name_similarity, best_fuzzy_key,
+                        SAME_PERSON_THRESHOLD)
+
+    # eSAKSHI still uses some pre-rename state spellings; alias them onto the
+    # conformed names used everywhere else BEFORE keying, or whole states
+    # silently fail to join.
+    ESAKSHI_STATE_ALIASES = {
+        "ORISSA": "Odisha", "PONDICHERRY": "Puducherry",
+        "UTTARANCHAL": "Uttarakhand", "NCT OF DELHI": "Delhi",
+        "DADRA AND NAGAR HAVELI": "Dadra & Nagar Haveli and Daman & Diu",
+        "DAMAN AND DIU": "Dadra & Nagar Haveli and Daman & Diu",
+        "DADRA AND NAGAR HAVELI AND DAMAN AND DIU":
+            "Dadra & Nagar Haveli and Daman & Diu",
+    }
+
+    mrows = [json.loads(l) for l in src.read_text(encoding="utf-8").splitlines() if l.strip()]
+    for m in mrows:
+        m["state"] = ESAKSHI_STATE_ALIASES.get(m["state"].strip().upper(), m["state"])
+    national = json.loads(nat_src.read_text(encoding="utf-8")) if nat_src.exists() else {}
+
+    latest = max(r["election_year"] for r in silver)
+    winners = {norm_key(r["state"], r["constituency"]): r
+               for r in silver if r["is_winner"] and r["election_year"] == latest}
+
+    # eSAKSHI lists some seats twice - a stale row carrying no allocation
+    # alongside the live one. Keep the row that actually has money against it.
+    by_seat = defaultdict(list)
+    for m in mrows:
+        by_seat[(m["state"], m["constituency"])].append(m)
+    deduped, dropped_dupes = [], 0
+    for _, rs in by_seat.items():
+        if len(rs) > 1:
+            rs = sorted(rs, key=lambda r: (r.get("allocated") or 0,
+                                           r.get("expenditure") or 0), reverse=True)
+            dropped_dupes += len(rs) - 1
+        deduped.append(rs[0])
+    mrows = deduped
+
+    joined, unmatched, mp_changed, fuzzy_joins = [], [], [], []
+    for m in mrows:
+        key = norm_key(m["state"], m["constituency"])
+        w = winners.get(key)
+        if not w:
+            # Fall back to a conservative fuzzy match within the same state,
+            # and record it so the reader can audit every approximate join.
+            hit = best_fuzzy_key(key, winners.keys())
+            if hit:
+                fk, ratio = hit
+                w = winners[fk]
+                fuzzy_joins.append({
+                    "state": m["state"], "mplads_name": m["constituency"],
+                    "matched_to": w["constituency"], "similarity": ratio,
+                })
+        row = {
+            "state": m["state"].title(), "constituency": m["constituency"].title(),
+            "mp_name": m["mp_name"], "allocated": m["allocated"],
+            "expenditure": m["expenditure"], "pct_spent": m["pct_spent"],
+            "works_recommended": m["works_recommended"],
+            "works_sanctioned": m["works_sanctioned"],
+            "works_completed": m["works_completed"],
+        }
+        if w:
+            row.update({
+                "state": w["state"], "constituency": w["constituency"],
+                "party": w["party"], "party_group": w["party_group"],
+                "criminal_cases": w["criminal_cases"], "assets": w["assets"],
+                "candidate_id": w["candidate_id"], "winner_2024": w["name"],
+            })
+            # Only flag a genuine change of MP. The two sources spell the same
+            # person differently often enough ("P V Midhun Reddy" vs "Midhun
+            # Reddy", "Purandeshwari" vs "Purandheshwari") that a strict compare
+            # would claim ~120 seats changed hands when almost none did.
+            sim = name_similarity(w["name"], m["mp_name"])
+            if sim < SAME_PERSON_THRESHOLD:
+                row["mp_differs_from_winner"] = True
+                mp_changed.append({"constituency": w["constituency"], "state": w["state"],
+                                   "winner_2024": w["name"], "current_mp": m["mp_name"],
+                                   "name_similarity": round(sim, 2)})
+        else:
+            unmatched.append({"state": m["state"], "constituency": m["constituency"],
+                              "mp_name": m["mp_name"]})
+        joined.append(row)
+
+    with_alloc = [r for r in joined if r.get("allocated")]
+    by_state = defaultdict(list)
+    for r in with_alloc:
+        by_state[r["state"]].append(r)
+    state_util = sorted(
+        ({"state": st,
+          "seats": len(rs),
+          "allocated": sum(r["allocated"] or 0 for r in rs),
+          "expenditure": sum(r["expenditure"] or 0 for r in rs),
+          "pct_spent": round(100 * sum(r["expenditure"] or 0 for r in rs)
+                             / sum(r["allocated"] or 0 for r in rs), 1),
+          "works_completed": sum(r["works_completed"] or 0 for r in rs)}
+         for st, rs in by_state.items() if sum(r["allocated"] or 0 for r in rs) > 0),
+        key=lambda x: -x["pct_spent"])
+
+    match_rate = round(100 * (len(joined) - len(unmatched)) / len(joined), 1) if joined else 0
+
+    # ---- reconciliation against an independent rendering of the same scheme ----
+    reconciliation = None
+    cc_path = pathlib.Path(raw_dir) / "mplads_crosscheck.json"
+    if cc_path.exists():
+        cc = json.loads(cc_path.read_text(encoding="utf-8"))
+
+        def unwrap(v):
+            """Tolerate both the raw {success, data} envelope and the unwrapped form."""
+            if isinstance(v, dict) and "data" in v and set(v) <= {"success", "data",
+                                                                 "cached", "cache_timestamp"}:
+                return v["data"] or {}
+            return v or {}
+
+        a = unwrap(cc.get("audit"))
+        sync = unwrap(cc.get("sync"))
+        ours_alloc = sum(r["allocated"] or 0 for r in joined)
+        ours_spend = sum(r["expenditure"] or 0 for r in joined)
+        ours_done = sum(r["works_completed"] or 0 for r in joined)
+        ours_reco = sum(r["works_recommended"] or 0 for r in joined)
+
+        def cmp(label, ours, theirs, note=""):
+            if not ours or not theirs:
+                return None
+            delta = ours - theirs
+            return {"metric": label, "ours": ours, "theirs": theirs, "delta": delta,
+                    "pct_delta": round(100 * delta / theirs, 2) if theirs else None,
+                    "note": note}
+
+        reconciliation = {
+            "source_name": "Empowered Indian",
+            "source_url": "https://empoweredindian.in/mplads",
+            "their_last_updated": sync.get("lastUpdated"),
+            "their_update_frequency": sync.get("updateFrequency"),
+            "their_quality_claim": sync.get("dataQuality"),
+            "scope_note": (
+                f"They publish both Houses ({a.get('records_total')} MPs = "
+                f"{a.get('records_lok_sabha')} Lok Sabha + {a.get('records_rajya_sabha')} "
+                f"Rajya Sabha). Only their Lok Sabha subset is comparable to this page."
+            ),
+            "their_internal_inconsistency": {
+                "records": a.get("records_completed_exceeds_recommended"),
+                "pct": a.get("pct_inconsistent"),
+                "description": ("rows where completed works exceed recommended works, "
+                                "producing a negative 'pending works' count"),
+            },
+            "comparisons": [c for c in [
+                cmp("Allocated to Lok Sabha MPs", ours_alloc, a.get("ls_allocated"),
+                    "Agreement here is the strongest signal that both readings of the "
+                    "official portal are sound."),
+                cmp("Expenditure", ours_spend, a.get("ls_expenditure"),
+                    "Small gaps are expected: the portal is live and the two snapshots "
+                    "were taken at different moments."),
+                cmp("Works completed", ours_done, a.get("ls_works_completed"),
+                    "Counts may be scoped differently by term."),
+                cmp("Works recommended", ours_reco, a.get("ls_works_recommended"),
+                    "Large gaps here indicate a definitional difference, not an error - "
+                    "the portal's own tile counts recommendations differently from a "
+                    "per-MP sum. Do not read this as one source being wrong."),
+            ] if c],
+        }
+
+    return {
+        "meta": {
+            "generated_at": generated,
+            "tenure": national.get("tenure") or (mrows[0]["tenure"] if mrows else ""),
+            "source": "MPLADS eSAKSHI portal (mplads.mospi.gov.in), Ministry of Statistics and Programme Implementation",
+            "joined_to": f"Lok Sabha {latest} winners by state + constituency",
+            "match_rate_pct": match_rate,
+            "duplicate_rows_dropped": dropped_dupes,
+            "fuzzy_join_count": len(fuzzy_joins),
+            "caveats": [
+                "eSAKSHI tracks the revised MPLADS procedure from 1 April 2023 onward; figures cover the current term only and its 'allocated limit' includes balances carried forward from a seat's previous MP - it is not the full-term entitlement.",
+                "The portal is live; these numbers are a dated snapshot and will differ from the portal on any later day.",
+                "MPs only RECOMMEND works. Funds go to district authorities, who sanction and execute - low expenditure is not by itself MP inaction, and early-term percentages are structurally low.",
+                "Lok Sabha MPs only; Rajya Sabha MPLADS entitlements are excluded, so totals here will not match scheme-wide figures.",
+                f"Rows are joined to election data by constituency name; {match_rate}% matched. "
+                f"The two sources transliterate names differently, so {len(fuzzy_joins)} seats "
+                f"were matched approximately and {dropped_dupes} duplicate rows were dropped. "
+                f"Every approximate match, every unmatched seat, and every seat whose sitting "
+                f"MP differs from the 2024 winner is listed below rather than hidden.",
+            ],
+        },
+        "national": national,
+        "mps": sorted(joined, key=lambda r: (-(r.get("pct_spent") or 0),
+                                             r["state"], r["constituency"])),
+        "state_utilization": state_util,
+        "mp_changed": mp_changed,
+        "unmatched": unmatched,
+        "fuzzy_joins": fuzzy_joins,
+        "reconciliation": reconciliation,
+    }
+
+
 def build_state_slices(silver):
     """
     Per-state versions of every aggregate the page shows, so the State/UT filter
@@ -378,6 +588,12 @@ def main():
         "states.json": {"meta": {"generated_at": generated},
                         **build_state_slices(silver)},
     }
+
+    mplads = build_mplads(raw_dir, silver, generated)
+    if mplads:
+        payloads["mplads.json"] = mplads
+    else:
+        print("  (no mplads.jsonl in raw dir - skipping MPLADS payload)")
 
     print()
     for fname, payload in payloads.items():

@@ -19,10 +19,25 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   summary: null, winners: [], leaderboards: [], repeats: [], states: null,
+  mplads: null,
+  tab: "overview",
   year: null, stateFilter: "", cohort: "All candidates", partyFilter: "",
-  board: "Richest candidates", search: "", repeatSearch: "",
+  board: "Richest candidates", search: "", repeatSearch: "", mpladsSearch: "",
   sort: { key: "constituency", dir: 1 },
   tableViews: new Set(),
+};
+
+/* Which renderers belong to which tab. Only the visible tab is rendered:
+   with seven SVG charts on the page, rendering all of them on every filter
+   change is wasted work the user cannot see. */
+const TABS = ["overview", "profile", "states", "mps", "funds", "about"];
+const TAB_RENDERERS = {
+  overview: () => { renderKPIs(); renderInsights(); renderTrends(); },
+  profile:  () => { renderEducation(); renderAge(); renderParty(); },
+  states:   () => { renderStates(); },
+  mps:      () => { renderWinnersTable(); renderLeaderboard(); renderRepeats(); },
+  funds:    () => { renderMplads(); },
+  about:    () => {},
 };
 
 const COHORTS = { all: "All candidates", win: "Winners (MPs)" };
@@ -36,13 +51,14 @@ const cohortColors = () => ({ "All candidates": CSS("--series-1"), "Winners (MPs
 
 async function boot() {
   try {
-    const [summary, winners, leaderboards, repeats, states] = await Promise.all([
+    const [summary, winners, leaderboards, repeats, states, mplads] = await Promise.all([
       fetch("data/summary.json").then(r => { if (!r.ok) throw new Error(`summary.json ${r.status}`); return r.json(); }),
       fetch("data/winners.json").then(r => r.ok ? r.json() : { winners: [] }),
       fetch("data/leaderboards.json").then(r => r.ok ? r.json() : { entries: [] }),
       fetch("data/repeat_candidates.json").then(r => r.ok ? r.json() : { candidates: [] })
         .catch(() => ({ candidates: [] })),
       fetch("data/states.json").then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch("data/mplads.json").then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
 
     state.summary = summary;
@@ -50,12 +66,14 @@ async function boot() {
     state.leaderboards = leaderboards.entries || [];
     state.repeats = repeats.candidates || [];
     state.states = states;   // null => state-level detail unavailable
+    state.mplads = mplads;   // null => MPLADS payload not published; card stays hidden
 
     const years = summary.meta.election_years || [];
     state.year = years[years.length - 1];
 
     mount(years);
-    renderAll();
+    // Honour a deep link like …/#funds on first paint.
+    setTab(location.hash.slice(1) || "overview", { updateHash: false });
   } catch (err) {
     $("app").className = "";
     $("app").innerHTML = `<div class="error">
@@ -99,10 +117,16 @@ function mount(years) {
 
   $("tableSearch").oninput = (e) => { state.search = e.target.value.toLowerCase(); renderWinnersTable(); };
   $("repeatSearch").oninput = (e) => { state.repeatSearch = e.target.value.toLowerCase(); renderRepeats(); };
+  $("mpladsSearch").oninput = (e) => { state.mpladsSearch = e.target.value.toLowerCase(); renderMplads(); };
 
   $("clearFilters").onclick = clearFilters;
   $("backToStates").onclick = () => { setStateFilter(""); };
   $("downloadFiltered").onclick = downloadFilteredCSV;
+
+  wireTabs();
+  // Hide the funds tab entirely when the pipeline has not published MPLADS yet,
+  // rather than offering a tab that leads nowhere.
+  if (!state.mplads) $("tab-funds").hidden = true;
 
   for (const btn of document.querySelectorAll(".view-toggle[data-view]")) {
     btn.onclick = () => {
@@ -149,15 +173,21 @@ function setStateFilter(s) {
 
 function setPartyFilter(pg) {
   state.partyFilter = pg;
-  renderWinnersTable();
-  if (pg) $("winnersTable").closest(".card").scrollIntoView({ behavior: "smooth", block: "start" });
+  if (pg) {
+    // The party chart lives on one tab and the MP list on another - follow the
+    // click across rather than silently filtering a table the user cannot see.
+    setTab("mps");
+    $("winnersTable").closest(".card").scrollIntoView({ behavior: "smooth", block: "start" });
+  } else {
+    renderWinnersTable();
+  }
 }
 
 function clearFilters() {
   state.stateFilter = ""; state.partyFilter = "";
-  state.search = ""; state.repeatSearch = "";
+  state.search = ""; state.repeatSearch = ""; state.mpladsSearch = "";
   const sel = $("fState"); if (sel) sel.value = "";
-  $("tableSearch").value = ""; $("repeatSearch").value = "";
+  $("tableSearch").value = ""; $("repeatSearch").value = ""; $("mpladsSearch").value = "";
   renderAll();
 }
 
@@ -207,23 +237,247 @@ function sliceGaps() {
 function renderAll() {
   hideTip();
   updateChrome();
-  renderKPIs();
-  renderInsights();
-  renderTrends();
-  renderEducation();
-  renderAge();
-  renderParty();
-  renderStates();
-  renderWinnersTable();
-  renderLeaderboard();
-  renderRepeats();
+  (TAB_RENDERERS[state.tab] || TAB_RENDERERS.overview)();
+}
+
+/* ---------- tab navigation ---------- */
+
+function setTab(name, { updateHash = true, focus = false } = {}) {
+  if (!TABS.includes(name)) name = "overview";
+  state.tab = name;
+
+  for (const t of TABS) {
+    const btn = $(`tab-${t}`), panel = $(`panel-${t}`);
+    if (!btn || !panel) continue;
+    const on = t === name;
+    btn.setAttribute("aria-selected", String(on));
+    btn.tabIndex = on ? 0 : -1;
+    // The panel must be visible BEFORE its charts render: a hidden element
+    // reports clientWidth 0, and every chart sizes itself from that.
+    panel.hidden = !on;
+  }
+
+  if (updateHash && location.hash.slice(1) !== name) {
+    history.pushState(null, "", `#${name}`);
+  }
+  if (focus) $(`tab-${name}`)?.focus();
+
+  hideTip();
+  updateChrome();
+  (TAB_RENDERERS[name] || (() => {}))();
+}
+
+function wireTabs() {
+  const bar = $("tabBar");
+  const btns = [...bar.querySelectorAll('[role="tab"]')];
+
+  for (const btn of btns) {
+    btn.onclick = () => setTab(btn.dataset.tab);
+    btn.onkeydown = (e) => {
+      const i = btns.indexOf(btn);
+      let j = null;
+      if (e.key === "ArrowRight") j = (i + 1) % btns.length;
+      else if (e.key === "ArrowLeft") j = (i - 1 + btns.length) % btns.length;
+      else if (e.key === "Home") j = 0;
+      else if (e.key === "End") j = btns.length - 1;
+      if (j !== null) { e.preventDefault(); setTab(btns[j].dataset.tab, { focus: true }); }
+    };
+  }
+
+  // Deep links and the browser back button both drive the same path.
+  addEventListener("hashchange", () => setTab(location.hash.slice(1), { updateHash: false }));
+  addEventListener("popstate", () => setTab(location.hash.slice(1), { updateHash: false }));
+}
+
+/* ---------- MPLADS: current-term development funds ---------- */
+
+function renderMplads() {
+  const card = $("mpladsCard");
+  const missing = $("mpladsMissing");
+  const data = state.mplads;
+  if (!data || !data.mps?.length) {
+    card.hidden = true;
+    if (missing) missing.hidden = false;
+    return;
+  }
+  card.hidden = false;
+  if (missing) missing.hidden = true;
+
+  const meta = data.meta || {};
+  $("mpladsTitle").textContent =
+    `Development funds (MPLADS) — ${meta.tenure || "current Lok Sabha"}`;
+
+  // Caveats are the point, not the fine print: the user-facing block lists
+  // every known discrepancy source, with the join numbers filled in.
+  const changed = data.mp_changed?.length || 0;
+  const unmatched = data.unmatched?.length || 0;
+  $("mpladsCaveats").innerHTML =
+    `<div><strong>Read this before the numbers.</strong>
+     <ul>${(meta.caveats || []).map(c => `<li>${c}</li>`).join("")}</ul>
+     ${changed ? `<details><summary>${changed} seat(s) where the sitting MP's name does not
+       match the 2024 winner</summary>
+       <p style="margin:8px 0; font-size:13px">Either the seat genuinely changed hands, or
+       the two sources simply write the name differently. The check is deliberately
+       conservative — it would rather flag a spelling difference than quietly attribute one
+       MP's spending to another. Judge each for yourself:</p>
+       <ul>${data.mp_changed.map(m =>
+         `<li>${m.constituency}, ${m.state}: eSAKSHI says <strong>${m.current_mp}</strong>,
+          the 2024 winner was <strong>${m.winner_2024}</strong></li>`).join("")}</ul></details>` : ""}
+     ${meta.fuzzy_join_count ? `<details><summary>${meta.fuzzy_join_count} seat(s) matched by
+       approximate constituency name</summary>
+       <p style="margin:8px 0; font-size:13px">The sources transliterate place names
+       differently. These were matched on closest spelling within the same state:</p>
+       <ul>${(data.fuzzy_joins || []).map(f =>
+         `<li>${f.state}: “${f.mplads_name}” → “${f.matched_to}” (${Math.round(f.similarity * 100)}% similar)</li>`
+       ).join("")}</ul></details>` : ""}
+     ${unmatched ? `<details><summary>${unmatched} constituenc(ies) could not be joined to
+       election data</summary>
+       <p style="margin:8px 0; font-size:13px">Fund figures for these seats are shown, but
+       without party or affidavit details:</p>
+       <ul>${data.unmatched.map(u =>
+         `<li>${u.constituency}, ${u.state} (${u.mp_name})</li>`).join("")}</ul></details>` : ""}
+    </div>`;
+
+  let rows = data.mps;
+  if (state.stateFilter) rows = rows.filter(r => r.state === state.stateFilter);
+  if (state.mpladsSearch) {
+    const q = state.mpladsSearch;
+    rows = rows.filter(r =>
+      (r.mp_name || "").toLowerCase().includes(q) ||
+      (r.winner_2024 || "").toLowerCase().includes(q) ||
+      (r.constituency || "").toLowerCase().includes(q) ||
+      (r.party || "").toLowerCase().includes(q) ||
+      (r.state || "").toLowerCase().includes(q));
+  }
+
+  // KPI strip for the current slice
+  const withAlloc = rows.filter(r => r.allocated);
+  const alloc = withAlloc.reduce((s, r) => s + (r.allocated || 0), 0);
+  const spent = withAlloc.reduce((s, r) => s + (r.expenditure || 0), 0);
+  const done = rows.reduce((s, r) => s + (r.works_completed || 0), 0);
+  const reco = rows.reduce((s, r) => s + (r.works_recommended || 0), 0);
+  $("mpladsKpis").innerHTML = [
+    { l: "Entitlement to date", v: fmtRupees(alloc) },
+    { l: "Spent on works", v: fmtRupees(spent) },
+    { l: "Share spent", v: alloc ? (100 * spent / alloc).toFixed(1) + "%" : "—" },
+    { l: "Works completed", v: `${fmtInt(done)} <span style="font-size:14px;
+        color:var(--text-muted)">of ${fmtInt(reco)} recommended</span>` },
+  ].map(k => `<div class="kpi kpi-in"><div class="kpi-label">${k.l}</div>
+              <div class="kpi-value">${k.v}</div></div>`).join("");
+
+  // State ranking (hidden when a single state is in focus)
+  const chartHost = $("mpladsChart");
+  if (state.stateFilter) {
+    chartHost.innerHTML = "";
+    $("mpladsChartTitle").style.display = "none";
+  } else {
+    $("mpladsChartTitle").style.display = "";
+    barChart(chartHost, {
+      data: data.state_utilization, labelKey: "state", valueKey: "pct_spent",
+      color: CSS("--series-1"), valueFormat: v => v.toFixed(0) + "%",
+      maxBars: 36, note: "Entitlement spent",
+      onClick: (r) => setStateFilter(r.state),
+      clickHint: "Click to focus the dashboard on this state",
+    });
+  }
+
+  renderTable($("mpladsTable"), [
+    { label: "Constituency", get: r => r.constituency, sortVal: r => r.constituency },
+    { label: "State", get: r => r.state, sortVal: r => r.state },
+    { label: "Sitting MP", sortVal: r => r.mp_name,
+      get: r => {
+        const link = r.candidate_id && !r.mp_differs_from_winner
+          ? `<a href="https://www.myneta.info/LokSabha2024/candidate.php?candidate_id=${r.candidate_id}"
+               target="_blank" rel="noopener noreferrer">${r.mp_name}</a>` : r.mp_name;
+        return r.mp_differs_from_winner
+          ? `${link} <span class="pill" title="This name does not match the 2024 winner — either the seat changed hands, or the two sources spell the name differently">name ≠ 2024 winner</span>`
+          : link;
+      } },
+    { label: "Party", get: r => r.party ? `<span class="pill">${r.party}</span>` : "—",
+      sortVal: r => r.party || "" },
+    { label: "Cases", num: true, sortVal: r => r.criminal_cases,
+      get: r => r.criminal_cases > 0
+        ? `<span class="pill flag">${r.criminal_cases}</span>`
+        : (r.criminal_cases === 0 ? "0" : "—") },
+    { label: "Entitled", num: true, get: r => fmtRupees(r.allocated), sortVal: r => r.allocated },
+    { label: "Spent", num: true, get: r => fmtRupees(r.expenditure), sortVal: r => r.expenditure },
+    { label: "% spent", num: true, sortVal: r => r.pct_spent,
+      get: r => r.pct_spent === null || r.pct_spent === undefined ? "—" : r.pct_spent.toFixed(1) + "%" },
+    { label: "Works done / rec.", num: true, sortVal: r => r.works_completed,
+      get: r => `${fmtInt(r.works_completed)} / ${fmtInt(r.works_recommended)}` },
+  ], rows, { sortable: true, id: "mpladsTbl" });
+
+  $("mpladsCount").textContent =
+    `Showing ${fmtInt(rows.length)} of ${fmtInt(data.mps.length)} seats`;
+  $("mpladsJoinNote").textContent =
+    `Join rate ${meta.match_rate_pct}% · snapshot ${meta.generated_at?.slice(0, 10) || ""}` +
+    ` · source: eSAKSHI, MoSPI`;
+
+  renderReconciliation(data.reconciliation);
+}
+
+/* Independent cross-check. Publishing where two readings of the same government
+   scheme disagree is more useful than quietly picking one. */
+function renderReconciliation(rec) {
+  const host = $("mpladsRecon");
+  if (!rec || !rec.comparisons?.length) { host.innerHTML = ""; return; }
+
+  const fmtDelta = (c) => {
+    if (c.delta === 0) return `<span style="color:var(--good); font-weight:600">exact match</span>`;
+    const p = Math.abs(c.pct_delta ?? 0);
+    const tone = p < 3 ? "var(--text-secondary)" : "var(--critical)";
+    return `<span style="color:${tone}; font-weight:600">${c.delta > 0 ? "+" : ""}` +
+           `${c.pct_delta}%</span>`;
+  };
+  const money = (m, v) => /Allocated|Expenditure/i.test(m) ? fmtRupees(v) : fmtInt(v);
+
+  const rows = rec.comparisons.map(c => `
+    <tr>
+      <td>${c.metric}<div style="font-size:12px; color:var(--text-muted);
+          white-space:normal; max-width:46ch">${c.note || ""}</div></td>
+      <td class="num">${money(c.metric, c.ours)}</td>
+      <td class="num">${money(c.metric, c.theirs)}</td>
+      <td class="num">${fmtDelta(c)}</td>
+    </tr>`).join("");
+
+  const inc = rec.their_internal_inconsistency || {};
+  host.innerHTML = `
+    <h3 class="sub-h">Cross-check against an independent source</h3>
+    <p class="desc">
+      <a href="${rec.source_url}" rel="noopener">${rec.source_name}</a> publishes its own
+      MPLADS dashboard from the same official portal. Comparing the two is a check on
+      both. Where they agree, confidence is high; where they diverge, the reason is
+      usually definitional rather than one side being wrong — so the gaps are shown
+      rather than reconciled away.
+    </p>
+    <div class="table-host"><table>
+      <thead><tr><th>Metric</th><th class="num">This dashboard</th>
+        <th class="num">${rec.source_name}</th><th class="num">Difference</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="notice" style="margin:14px 0 0">
+      <div>
+        <strong>Scope and quality differences.</strong>
+        <ul>
+          <li>${rec.scope_note}</li>
+          ${inc.records ? `<li>Their dataset contains <strong>${fmtInt(inc.records)} records
+            (${inc.pct}%)</strong> that are internally inconsistent — ${inc.description} —
+            while reporting a data-quality score of ${rec.their_quality_claim}. Treat
+            per-MP works counts from either source as indicative, not exact.</li>` : ""}
+          <li>They refresh ${rec.their_update_frequency || "on their own schedule"}
+            (theirs last updated ${rec.their_last_updated || "unknown"}); this page is a
+            snapshot from its last pipeline run, so figures will drift apart between runs.</li>
+        </ul>
+      </div>
+    </div>`;
 }
 
 function updateChrome() {
   $("contextLine").textContent =
     `${state.year} · ${scopeName()} · ${state.cohort}`;
 
-  const active = state.stateFilter || state.partyFilter || state.search || state.repeatSearch;
+  const active = state.stateFilter || state.partyFilter || state.search ||
+                 state.repeatSearch || state.mpladsSearch;
   $("clearFilters").classList.toggle("hidden", !active);
 
   const msgs = sliceGaps();

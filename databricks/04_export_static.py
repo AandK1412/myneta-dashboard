@@ -13,6 +13,11 @@
 # MAGIC The result is faster and free at any traffic level: no warehouse spins up when a
 # MAGIC visitor loads the page, and there is no credential anywhere in the browser.
 # MAGIC
+# MAGIC **Not exported here (yet):** `mplads.json` (the development-funds tab) is produced
+# MAGIC by `pipeline/fetch_mplads.py` + `build_static.py` via the local/Actions path. Port it
+# MAGIC here the same way `pipeline/myneta.py` is used by the bronze notebook if you want the
+# MAGIC Databricks job to own it too.
+# MAGIC
 # MAGIC **Auth.** Set a GitHub fine-grained PAT with `Contents: read & write` on the target
 # MAGIC repo, stored as a Databricks secret. Create it once from the CLI:
 # MAGIC ```

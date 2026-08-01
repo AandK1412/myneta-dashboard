@@ -38,8 +38,12 @@ drifting source data, and scheduled recomputation.
 pipeline/
   myneta.py          Scraper + parser. Stdlib only, so it runs unchanged
                      locally and on Databricks serverless.
+  mplads.py          MPLADS (eSAKSHI) REST client - current-term fund
+                     utilization per sitting MP. Stdlib only.
+  fetch_mplads.py    MPLADS fetch runner -> data/raw/mplads.jsonl.
   scrape_local.py    Local/CI scrape runner -> JSONL, resumable via disk cache.
-  build_static.py    Local mirror of the silver+gold+export notebooks.
+  build_static.py    Local mirror of the silver+gold+export notebooks,
+                     plus the MPLADS join (docs/data/mplads.json).
   test_parser.py     Parser tests against real cached pages.
 
 databricks/
@@ -148,6 +152,47 @@ nobody audits them. The dashboard aggregates the published record and adds no es
 `docs/data/candidates.csv` is the tidy, flat version of everything — one row per
 candidate per election. Reuse it; the point is to save the next person from writing this
 scraper again.
+
+### MPLADS (development funds) — extra caveats
+
+The MPLADS tab joins each sitting MP's fund position from MoSPI's
+[eSAKSHI portal](https://mplads.mospi.gov.in/digigov/dashboard.html) to the election
+data. Known discrepancy sources, all surfaced in the UI:
+
+- **eSAKSHI only tracks the revised procedure from 1 April 2023.** Its "17th Lok Sabha"
+  view covers that term's final ~14 months (~₹4,765 Cr allocated vs ~₹13,500 Cr for a
+  real five-year term), so this project shows the **current term only** and never
+  presents eSAKSHI figures as historical utilisation.
+- **"Allocated limit" ≠ full-term entitlement.** It is the entitlement accrued to date
+  *including carry-forward* of the seat's previous unspent balances.
+- **The sitting MP is not always the 2024 winner** (bye-elections, resignations). The
+  join flags such seats (`mp_differs_from_winner`) instead of pretending they match.
+- **MPs recommend; district authorities execute.** Low spend ≠ MP inaction, and
+  early-term percentages are structurally low.
+- **Lok Sabha only** — Rajya Sabha MPLADS entitlements are excluded, so totals will not
+  match scheme-wide figures. The portal is live; published numbers are a dated snapshot.
+- MPLADS currently ships via the local/Actions path (`fetch_mplads.py` +
+  `build_static.py`); the Databricks job does not yet produce `mplads.json`.
+
+#### Independent cross-check
+
+The tab reconciles itself against [Empowered Indian](https://empoweredindian.in/mplads),
+a civic-tech dashboard built from the same official portal, and **publishes the deltas**
+rather than quietly picking a winner. Measured 1 Aug 2026:
+
+| Metric | This dashboard (eSAKSHI direct) | Empowered Indian |
+|---|---|---|
+| Allocated to Lok Sabha MPs | ₹8,304.66 Cr | ₹8,304.66 Cr — **exact match** |
+| Expenditure | ₹2,569.06 Cr | ₹2,522.11 Cr (~1.8%, snapshot timing) |
+| Works recommended | 99,738 | 66,571 — **definitional difference** |
+
+The allocated figures agreeing to the rupee is the strongest available evidence that both
+readings of the portal are sound. The works-count gap is a definition difference (the
+portal's own tile counts recommendations differently from a per-MP sum), not an error in
+either. Separately, ~19.5% of their per-MP records report more completed works than
+recommended — producing negative "pending works" — so **treat per-MP works counts from
+either source as indicative, not exact**. Their scope is both Houses (755 MPs); only
+their Lok Sabha subset is comparable here.
 
 ---
 

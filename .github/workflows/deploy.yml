@@ -67,6 +67,22 @@ jobs:
                       problems.append("winners.json contains no winners")
                   check_states(payload.get("winners", []), "winners")
 
+          # Optional payloads: validated when present, absence is not an error.
+          mp = data / "mplads.json"
+          if mp.exists():
+              try:
+                  payload = json.loads(mp.read_text(encoding="utf-8"))
+                  n = len(payload.get("mps", []))
+                  rate = payload.get("meta", {}).get("match_rate_pct")
+                  print(f"  {'mplads.json':<24} {mp.stat().st_size/1024:>8.1f} KB  ok "
+                        f"({n} seats, join {rate}%)")
+                  if n and n < 500:
+                      problems.append(f"mplads.json looks truncated: only {n} seats")
+                  if rate is not None and rate < 90:
+                      problems.append(f"mplads.json join rate suspiciously low: {rate}%")
+              except json.JSONDecodeError as e:
+                  problems.append(f"mplads.json is not valid JSON: {e}")
+
           if problems:
               print("\nVALIDATION FAILED:")
               for p in dict.fromkeys(problems):
